@@ -20,7 +20,7 @@ changes do not predict rank movement (corr ~0.02), so playing is not used.
 Because ranks are a permutation, independent per-game normals under-count
 the mass at each place (the top places are always filled by *some* known
 game).  Each place's probabilities are therefore renormalised to a total
-mass of 0.85 -- the empirical share of a place held, over the window, by a
+mass of 0.87 -- the empirical share of a place held, over the window, by a
 game already on the last chart (the rest is new games joining the chart,
 which cannot be named and stay in the unnamed share).
 
@@ -48,7 +48,10 @@ DT_BINS = [(0, 12), (12, 24), (24, 48), (48, 72), (72, 120), (120, 200)]
 
 # Total probability mass assigned to already-known games at each place.
 # The remainder is the unnamed share (new games joining during the window).
-PLACE_MASS = 0.85
+# Tuned on rolling-origin: 0.87 with the truncation fix (0.85 was best
+# without it); the flat grid 0.83/0.85/0.87 is within noise of each other,
+# and 0.87 also had the best practice score of the three.
+PLACE_MASS = 0.87
 
 # Momentum: shrink factor for the recent rank velocity, and its decay time.
 MOM_SHRINK = 0.5
@@ -186,7 +189,12 @@ def forecast(rows, ts, ranks, hours):
                         vs.append((ranks[i][g] - ranks[i - 1][g]) / dt)
             if vs:
                 vel[g] = MOM_SHRINK * sum(vs) / len(vs)
-    # Time-averaged place probabilities.
+    # Time-averaged place probabilities.  Each game's rank distribution is
+    # conditioned on being on the chart (ranks 1..N): without this the
+    # normal loses the mass below rank 1, so top games are under-sharp at
+    # short horizons (the raw total mass at place 1 was only 0.79 at h=0,
+    # against an empirical known-share of ~1.00).
+    n_chart = len(last)
     pk = {g: [0.0] * 11 for g in games}
     for g in games:
         r0 = last[g]
@@ -199,9 +207,11 @@ def forecast(rows, ts, ranks, hours):
             surv = 1.0 - exit_prob(exit_pts, b, dt)
             if surv <= 0:
                 continue
+            z = norm_cdf((n_chart + 0.5 - m) / sd) - norm_cdf((0.5 - m) / sd)
+            z = max(z, 1e-6)
             for k in range(1, 11):
                 pk[g][k] += surv * (norm_cdf((k + 0.5 - m) / sd)
-                                    - norm_cdf((k - 0.5 - m) / sd)) / hours
+                                    - norm_cdf((k - 0.5 - m) / sd)) / z / hours
     # Renormalise each place to the empirical known-game mass.
     for k in range(1, 11):
         tot = sum(pk[g][k] for g in games)
